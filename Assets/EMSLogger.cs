@@ -1,12 +1,12 @@
-using UnityEngine;
+ï»¿using UnityEngine;
 using System;
 using System.IO;
 using System.Text;
 using System.Collections.Generic;
 
 /// <summary>
-/// [Singleton] EMS ·Î±×¸¦ Unix time ±âÁØ CSV·Î ±â·Ï
-/// - ¸ğµå(Task+GuideType+Location)º° ¹öÆ° Å¬¸¯ index °ü¸®
+/// [Singleton] EMS ë¡œê·¸ë¥¼ Unix time ê¸°ì¤€ CSVë¡œ ê¸°ë¡
+/// - ëª¨ë“œ(Task+GuideType+Location)ë³„ ë²„íŠ¼ í´ë¦­ index ê´€ë¦¬
 /// </summary>
 public class EMSLogger : MonoBehaviour
 {
@@ -22,8 +22,8 @@ public class EMSLogger : MonoBehaviour
     private string currentGuideType = "N/A";  // OP / PR
     private string currentLocation = "N/A";   // OF / FF
 
-    // ===== ÇÙ½É =====
-    // ¸ğµåº° ¹öÆ° Å¬¸¯ È½¼ö °ü¸®
+    // ===== í•µì‹¬ =====
+    // ëª¨ë“œë³„ ë²„íŠ¼ í´ë¦­ íšŸìˆ˜ ê´€ë¦¬
     private Dictionary<string, int> modePressCount = new Dictionary<string, int>();
     private int currentButtonIndex = -1;
 
@@ -57,16 +57,16 @@ public class EMSLogger : MonoBehaviour
             csvWriter.WriteLine(header);
             csvWriter.Flush();
 
-            Debug.Log($"[EMSLogger] ·Î±× ÆÄÀÏ »ı¼º ¿Ï·á: {logPath}");
+            Debug.Log($"[EMSLogger] ë¡œê·¸ íŒŒì¼ ìƒì„± ì™„ë£Œ: {logPath}");
         }
         catch (Exception e)
         {
-            Debug.LogError($"[EMSLogger] ÆÄÀÏ »ı¼º ½ÇÆĞ: {e.Message}");
+            Debug.LogError($"[EMSLogger] íŒŒì¼ ìƒì„± ì‹¤íŒ¨: {e.Message}");
         }
     }
 
     // =========================
-    // Trial ½ÃÀÛ
+    // Trial ì‹œì‘
     // =========================
     public void StartNewTrial(
         string pattern,
@@ -82,7 +82,7 @@ public class EMSLogger : MonoBehaviour
         currentGuideType = guideType;
         currentLocation = location;
 
-        // ¿©±â¼­ modeKey ±âÁØ ¹öÆ° ÀÎµ¦½º Áõ°¡
+        // ì—¬ê¸°ì„œ modeKey ê¸°ì¤€ ë²„íŠ¼ ì¸ë±ìŠ¤ ì¦ê°€
         string modeKey = $"{task}_{guideType}_{location}";
         if (!modePressCount.ContainsKey(modeKey))
             modePressCount[modeKey] = 0;
@@ -106,7 +106,7 @@ public class EMSLogger : MonoBehaviour
 
 
     // =========================
-    // EMS ¸í·É ±â·Ï
+    // EMS ëª…ë ¹ ê¸°ë¡
     // =========================
     public void LogEmsCommand(int channelID, int intensity, float durationMs)
     {
@@ -147,6 +147,6 @@ public class EMSLogger : MonoBehaviour
     void OnApplicationQuit()
     {
         csvWriter?.Close();
-        Debug.Log("[EMSLogger] EMS ·Î±× ÀúÀåµÊ.");
+        Debug.Log("[EMSLogger] EMS ë¡œê·¸ ì €ì¥ë¨.");
     }
 }

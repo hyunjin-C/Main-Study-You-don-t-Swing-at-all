@@ -1,0 +1,46 @@
+{
+    "version": 1,
+    "name": "MidiInputActions",
+    "maps": [
+        {
+            "name": "Midi",
+            "id": "037b7de8-bd8b-4238-955c-44efdc5bd5dc",
+            "actions": [
+                {
+                    "name": "NoteOn",
+                    "type": "Button",
+                    "id": "05ebccfa-b3a6-46eb-bfb0-38d50342d7c5",
+                    "expectedControlType": "",
+                    "processors": "",
+                    "interactions": "",
+                    "initialStateCheck": true
+                }
+            ],
+            "bindings": [
+                {
+                    "name": "",
+                    "id": "efbb5ba8-0617-4e4d-b77e-fe2d437527b9",
+                    "path": "",
+                    "interactions": "",
+                    "processors": "",
+                    "groups": "",
+                    "action": "NoteOn",
+                    "isComposite": false,
+                    "isPartOfComposite": false
+                },
+                {
+                    "name": "",
+                    "id": "6cb3073c-3294-4d78-8bf5-4cba23d04d47",
+                    "path": "",
+                    "interactions": "",
+                    "processors": "",
+                    "groups": "",
+                    "action": "NoteOn",
+                    "isComposite": false,
+                    "isPartOfComposite": false
+                }
+            ]
+        }
+    ],
+    "controlSchemes": []
+}
