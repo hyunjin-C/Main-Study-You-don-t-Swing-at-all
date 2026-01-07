@@ -7,9 +7,6 @@ using System.Collections; // Coroutines
 
 public class PilotTestController : MonoBehaviour
 {
-    [Header("Network Settings")]
-    public string arduinoIpAddress = "192.168.0.150";
-    public int arduinoPort = 80;
 
     // --- [!! 수정됨 1.1: 5채널 + 개별 Save/Test/Adjust UI !!] ---
     [Header("UI Elements - Calibration Control")]
@@ -175,9 +172,9 @@ public class PilotTestController : MonoBehaviour
     public int testBPM = 40; 
 
     // --- Internal Variables ---
-    private TcpClient client;
-    private StreamWriter writer;
-    private bool isConnected = false;
+    //private TcpClient client;
+    //private StreamWriter writer;
+    //private bool isConnected = false;
 
     // --- [!! 수정됨 1.2: 6채널 변수 배열 !!] ---
     private const int ChannelCount = 6;
@@ -245,23 +242,26 @@ public class PilotTestController : MonoBehaviour
     // --- Unity Lifecycle Functions ---
     void Start()
     {
-        UpdateStatus("Connecting to Arduino...");
-        ConnectToArduino();
-        PopulateUIArrays(); // UI 배열 초기화
+        PopulateUIArrays();
         SetupUIListeners();
-        LoadCalibrationData(); // 모든 채널의 저장된 값 로드 및 UI 표시
-        SetState(isConnected ? State.Calibrating : State.Idle);
+        LoadCalibrationData();
+
+        // 연결 여부는 네트워크 매니저(ArduinoTcpClient)가 관리
+        bool connected = (ArduinoTcpClient.Instance != null && ArduinoTcpClient.Instance.IsConnected);
+
+        // 연결이 아직 안 됐더라도 캘리브레이션 UI는 켜두는 게 보통 편함
+        // (연결되면 바로 테스트 펄스가 날아가도록)
+        SetState(connected ? State.Calibrating : State.Calibrating);
+
+        UpdateStatus(connected ? "Arduino Connected." : "Arduino not connected yet. Trying...");
     }
 
     void OnApplicationQuit()
-    {
-        if (isConnected)
-        {
-            SendEmsCommand(0, 0, 0, 0, 0, 0); // 6채널 OFF
-            writer?.Close();
-            client?.Close();
-        }
-    }
+{
+    // Pilot/Main 둘 다 있어도 안전하게: 매니저에게 OFF 요청만
+    if (ArduinoTcpClient.Instance != null)
+        ArduinoTcpClient.Instance.SendOff();
+}
 
     // --- [!! 신규 1.4: UI 배열 초기화 함수 !!] ---
     void PopulateUIArrays()
@@ -300,26 +300,6 @@ public class PilotTestController : MonoBehaviour
         maxActuationValueTexts[3] = maxActuationValueText_Ch4;
         maxActuationValueTexts[4] = maxActuationValueText_Ch5;
         maxActuationValueTexts[5] = maxActuationValueText_Ch6;
-    }
-
-    // --- Network Connection (동일) ---
-    void ConnectToArduino()
-    {
-        try
-        {
-            client = new TcpClient();
-            client.Connect(arduinoIpAddress, arduinoPort);
-            writer = new StreamWriter(client.GetStream());
-            isConnected = true;
-            Debug.Log($"Arduino connected at {arduinoIpAddress}:{arduinoPort}");
-            UpdateStatus("Arduino Connected. Start Calibration.");
-        }
-        catch (System.Exception e)
-        {
-            Debug.LogError($"Error connecting to Arduino: {e.Message}");
-            UpdateStatus("Arduino Connection Failed!");
-            isConnected = false;
-        }
     }
 
     // --- [!! 수정됨 2.1: UI 리스너 (중복 제거 버전) !!] ---
@@ -678,7 +658,12 @@ public class PilotTestController : MonoBehaviour
                 statusText.text = "Status: Testing in progress...";
                 testInstructionText.text = "Feeling the pattern...";
                 break;
-            default: statusText.text = isConnected ? "Status: Idle" : "Status: Connection Failed!"; break;
+            default:
+                {
+                    bool connected = (ArduinoTcpClient.Instance != null && ArduinoTcpClient.Instance.IsConnected);
+                    statusText.text = connected ? "Status: Idle" : "Status: Not Connected";
+                    break;
+                }
         }
     }
 
@@ -1250,64 +1235,8 @@ public class PilotTestController : MonoBehaviour
     // --- [!! 수정됨 5.1: 6채널 네트워크 함수 !!] ---
     void SendEmsCommand(int intensityCh1, int intensityCh2, int intensityCh3, int intensityCh4, int intensityCh5, int intensityCh6, float durationInSeconds = 0f)
     {
-        if (!isConnected || writer == null)
-        {
-            Debug.LogWarning("SendEmsCommand: Not connected.");
-            return;
-        }
-
-        int[] intensities = new int[] {
-            Mathf.Clamp(intensityCh1, 0, 255), 
-            Mathf.Clamp(intensityCh2, 0, 255),
-            Mathf.Clamp(intensityCh3, 0, 255),
-            Mathf.Clamp(intensityCh4, 0, 255),
-            Mathf.Clamp(intensityCh5, 0, 255),
-            Mathf.Clamp(intensityCh6, 0, 255) // Ch6 추가
-        };
-
-        int finalIntensity = 0;
-        int finalChannel = 0;
-        for (int i = 0; i < ChannelCount; i++) // ChannelCount는 6
-        {
-            if (intensities[i] > finalIntensity)
-            {
-                finalIntensity = intensities[i];
-                finalChannel = i + 1;
-            }
-        }
-
-        string[] ports = new string[6] {
-            intensities[0].ToString("D3"),
-            intensities[1].ToString("D3"), 
-            intensities[2].ToString("D3"),
-            intensities[3].ToString("D3"),
-            intensities[4].ToString("D3"),
-            intensities[5].ToString("D3") // Ch6 값 사용
-        };
-
-        System.Text.StringBuilder commandBuilder = new System.Text.StringBuilder();
-        foreach (string p in ports) commandBuilder.Append(p);
-        commandBuilder.Append("\n");
-        string command = commandBuilder.ToString();
-
-        try
-        {
-            float durationInMs = durationInSeconds * 1000f; 
-
-
-            Debug.Log($"[SendEmsCommand] Sending: {command.Trim()} | Duration: {durationInMs:F0} ms");
-            // emsLogger?.LogEmsCommand(finalChannel, finalIntensity, durationInMs);
-
-
-            writer.Write(command);
-            writer.Flush();
-        }
-        catch (System.Exception e)
-        {
-            Debug.LogError($"Error sending command: {e.Message}");
-            isConnected = false;
-            UpdateStatus("Arduino Connection Lost!");
-        }
+        int[] intensities = new int[] { intensityCh1, intensityCh2, intensityCh3, intensityCh4, intensityCh5, intensityCh6 };
+        ArduinoTcpClient.Instance?.Send(intensities);
     }
 
 

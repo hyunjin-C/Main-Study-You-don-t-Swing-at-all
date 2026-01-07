@@ -1,22 +1,11 @@
 ﻿using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
-using System.Net.Sockets;
-using System.IO;
 using System.Collections;
+using System.Collections.Generic;
 
 public class MainTestController : MonoBehaviour
 {
-    // =========================
-    // Network (Arduino)
-    // =========================
-    [Header("Network Settings")]
-    public string arduinoIpAddress = "192.168.0.150";
-    public int arduinoPort = 80;
-
-    private TcpClient client;
-    private StreamWriter writer;
-    private bool isConnected = false;
 
     private const int ChannelCount = 6;
 
@@ -42,6 +31,21 @@ public class MainTestController : MonoBehaviour
     [Header("Practice Sequence Audio Buttons (10개)")]
     public Button[] practiceAudioButtons;
     public AudioClip[] practiceAudioClips;
+
+    // =========================
+    // Visual Guide - Piano Keys
+    // =========================
+    [Header("Visual Guide - Piano Keys")]
+    public Renderer pianoKeyD;
+    public Renderer pianoKeyE;
+    public Renderer pianoKeyF;
+    public Renderer pianoKeyG;
+
+    [Header("Visual Guide - Colors")]
+    public Color keyDefaultColor = Color.white;
+    public Color keyHighlightColor = Color.yellow;
+
+    private Dictionary<int, Renderer> channelToKeyRenderer;
 
     // =========================
     // Step 1 (Guidance)
@@ -78,10 +82,19 @@ public class MainTestController : MonoBehaviour
     [Header("Step 3 Buttons")]
     public Button btnSwing;
 
+    [Header("Test Phase Buttons")]
+    public Button btnPreTest;
+    public Button btnPostTest;
+    public Button btnTransferTest;
+    public Button btnReconnect;
+
     [Header("Step 3 Trial Counter")]
     public TMP_Text trialCounterText;
     private int currentTrialCount = 0;
     private const int MaxTrials = 10;
+
+    private string lastGuidanceType = "";
+    private string lastSequence = "";
 
     [Header("EMS Timing (Base Notes)")]
     public float longDurationSec = 1.0f;
@@ -110,8 +123,9 @@ public class MainTestController : MonoBehaviour
     {
         Debug.Log("[MainTestController] Start() called");
 
-        ConnectToArduino();
         LoadCalibrationData();
+
+        InitializePianoKeys();
 
         if (btnVisual != null) btnVisual.onClick.AddListener(() => OnGuidancePicked("1. Visual Guide"));
         if (btnElectricCue != null) btnElectricCue.onClick.AddListener(() => OnGuidancePicked("2. Electric Cue"));
@@ -123,6 +137,12 @@ public class MainTestController : MonoBehaviour
 
         if (btnSwing != null) btnSwing.onClick.AddListener(OnSwingClicked);
 
+        if (btnPreTest != null) btnPreTest.onClick.AddListener(OnPreTestClicked);
+        if (btnPostTest != null) btnPostTest.onClick.AddListener(OnPostTestClicked);
+        if (btnTransferTest != null) btnTransferTest.onClick.AddListener(OnTransferTestClicked);
+
+        if (btnReconnect != null) btnReconnect.onClick.AddListener(OnReconnectClicked);
+
         SetupPracticeAudioButtons();
 
         RefreshSelectedGuidanceUI();
@@ -132,16 +152,42 @@ public class MainTestController : MonoBehaviour
         Debug.Log($"[Wiring Check] Visual={btnVisual != null}, Electric={btnElectricCue != null}, PressOnly={btnPressOnly != null}, PressRelease={btnPressRelease != null}, Select={btnSelectGuidance != null}, Swing={btnSwing != null}");
     }
 
+    // =========================
+    // Test Phase Button Handlers
+    // =========================
+    private void OnPreTestClicked()
+    {
+        Debug.Log("[MainTestController] ========== Pre-test Button Clicked ==========");
+        EMSTestPhaseLogger.Instance?.LogPreTestClick();
+    }
+
+    private void OnPostTestClicked()
+    {
+        Debug.Log("[MainTestController] ========== Post-test Button Clicked ==========");
+        EMSTestPhaseLogger.Instance?.LogPostTestClick();
+    }
+
+    private void OnTransferTestClicked()
+    {
+        Debug.Log("[MainTestController] ========== Transfer-test Button Clicked ==========");
+        EMSTestPhaseLogger.Instance?.LogTransferTestClick();
+    }
+
+    // =========================
+    // Manual Reconnection
+    // =========================
+    private void OnReconnectClicked()
+    {
+        Debug.Log("[MainTestController] Manual reconnection requested by user");
+        ArduinoTcpClient.Instance?.Reconnect();   // 이런 메서드를 ArduinoTcpClient에 만들어두는 걸 추천
+    }
+
     private void OnApplicationQuit()
     {
         Debug.Log("[MainTestController] OnApplicationQuit() called");
         StopAllStimulation();
+        ArduinoTcpClient.Instance?.SendOff();
 
-        if (isConnected)
-        {
-            writer?.Close();
-            client?.Close();
-        }
     }
 
     // =========================
@@ -214,7 +260,23 @@ public class MainTestController : MonoBehaviour
     // =========================
     public void OnCalibrationPass()
     {
-        Debug.Log("[MainTestController] OnCalibrationPass() called");
+        Debug.Log("[MainTestController] ===== OnCalibrationPass START =====");
+
+        // 1) 데이터 로드
+        LoadCalibrationData();
+
+        // 2) 연결 확인 (ArduinoTcpClient 단일 책임)
+        if (ArduinoTcpClient.Instance == null || !ArduinoTcpClient.Instance.IsConnected)
+        {
+            Debug.LogWarning("[MainTestController] Arduino not connected. Trying reconnect...");
+            ArduinoTcpClient.Instance?.Reconnect();
+            // 여기서 즉시 return 할지 말지는 선택인데, 보통은 return 권장
+            // return;
+        }
+
+        Debug.Log($"[Status] ArduinoConnected={ArduinoTcpClient.Instance != null && ArduinoTcpClient.Instance.IsConnected}");
+
+        // 3) 패널 전환
         if (calibrationPanel != null) calibrationPanel.SetActive(false);
         if (mainTestPanel != null) mainTestPanel.SetActive(true);
 
@@ -223,7 +285,10 @@ public class MainTestController : MonoBehaviour
 
         RefreshSelectedGuidanceUI();
         RefreshSelectedSequenceUI();
+
+        Debug.Log("[MainTestController] ===== OnCalibrationPass END =====");
     }
+
 
     // =========================
     // Step 1
@@ -303,6 +368,17 @@ public class MainTestController : MonoBehaviour
     {
         Debug.Log("[MainTestController] ========== OnSwingClicked() ENTER ==========");
 
+        // ✅ 연결 상태 재확인
+        if (ArduinoTcpClient.Instance == null || !ArduinoTcpClient.Instance.IsConnected)
+        {
+            Debug.LogError("[MainTestController] Arduino not connected!");
+            // (선택) ArduinoTcpClient.Instance?.Reconnect();
+            return;
+        }
+
+        Debug.Log($"[Connection Check] connected={ArduinoTcpClient.Instance.IsConnected}");
+
+
         if (string.IsNullOrEmpty(confirmedGuidanceLabel))
         {
             Debug.LogWarning("[MainTestController] Select Guidance first.");
@@ -369,13 +445,31 @@ public class MainTestController : MonoBehaviour
 
         StopAllStimulation();
 
+        string currentCondition = $"{guidanceTypeCode}_{confirmedSequence}";
+        string lastCondition = $"{lastGuidanceType}_{lastSequence}";
+
+        if (currentCondition != lastCondition && !string.IsNullOrEmpty(lastCondition))
+        {
+            Debug.Log($"[MainTestController] Condition changed: '{lastCondition}' → '{currentCondition}'");
+            Debug.Log($"[MainTestController] Resetting trial counter from {currentTrialCount} to 0");
+            currentTrialCount = 0;
+        }
+
+        lastGuidanceType = guidanceTypeCode;
+        lastSequence = confirmedSequence;
+
         currentTrialCount++;
         UpdateTrialCounterUI();
 
         Debug.Log($"[MainTestController] Starting trial #{currentTrialCount}: guidance={guidanceTypeCode}, sequence={confirmedSequence}");
         EMSMainTestLogger.Instance?.StartNewTrial(guidanceTypeCode, confirmedSequence, currentTrialCount);
 
-        if (guidanceTypeCode == "PressOnly")
+        if (guidanceTypeCode == "Visual")
+        {
+            Debug.Log("[MainTestController] Starting Visual Guide coroutine...");
+            currentStimCoroutine = StartCoroutine(PlayVisualGuideSequence(confirmedSequence));
+        }
+        else if (guidanceTypeCode == "PressOnly")
         {
             Debug.Log("[MainTestController] Starting PressOnly coroutine...");
             currentStimCoroutine = StartCoroutine(PlayPressOnlySequence(confirmedSequence));
@@ -395,6 +489,125 @@ public class MainTestController : MonoBehaviour
             Debug.LogWarning($"[MainTestController] '{guidanceTypeCode}' is not implemented yet.");
             EMSMainTestLogger.Instance?.StopTrial();
         }
+    }
+
+    // =========================
+    // Visual Guide - Piano Key Initialization
+    // =========================
+    private void InitializePianoKeys()
+    {
+        channelToKeyRenderer = new Dictionary<int, Renderer>();
+
+        if (pianoKeyD != null) channelToKeyRenderer[1] = pianoKeyD;
+        if (pianoKeyE != null) channelToKeyRenderer[2] = pianoKeyE;
+        if (pianoKeyF != null) channelToKeyRenderer[3] = pianoKeyF;
+        if (pianoKeyG != null) channelToKeyRenderer[4] = pianoKeyG;
+
+        Debug.Log($"[Visual Guide] Initialized {channelToKeyRenderer.Count} piano keys");
+
+        ResetAllPianoKeys();
+    }
+
+    private void ResetAllPianoKeys()
+    {
+        if (channelToKeyRenderer == null) return;
+
+        foreach (var kvp in channelToKeyRenderer)
+        {
+            if (kvp.Value != null && kvp.Value.material != null)
+            {
+                kvp.Value.material.color = keyDefaultColor;
+            }
+        }
+    }
+
+    private void SetPianoKeyColor(int channel, Color color)
+    {
+        if (channelToKeyRenderer == null) return;
+
+        if (channelToKeyRenderer.ContainsKey(channel))
+        {
+            Renderer keyRenderer = channelToKeyRenderer[channel];
+            if (keyRenderer != null && keyRenderer.material != null)
+            {
+                keyRenderer.material.color = color;
+                Debug.Log($"[Visual Guide] Set key Ch{channel} to color {color}");
+            }
+        }
+        else
+        {
+            Debug.LogWarning($"[Visual Guide] Channel {channel} not found in key dictionary");
+        }
+    }
+
+    // =========================
+    // Visual Guide: 2번 반복, 건반 색상 변경
+    // =========================
+    private IEnumerator PlayVisualGuideSequence(string sequence)
+    {
+        Debug.Log($"[PlayVisual] ===== START ===== sequence: {sequence} (will repeat 2 times)");
+
+        string[] tokens = sequence.Split('-');
+        Debug.Log($"[PlayVisual] Split into {tokens.Length} tokens: [{string.Join(", ", tokens)}]");
+
+        if (tokens.Length != 4)
+        {
+            Debug.LogError($"[MainTestController] Invalid sequence format: {sequence} (expected 4 tokens)");
+            EMSMainTestLogger.Instance?.StopTrial();
+            yield break;
+        }
+
+        ResetAllPianoKeys();
+
+        for (int repeat = 0; repeat < 2; repeat++)
+        {
+            Debug.Log($"[PlayVisual] ========== REPEAT {repeat + 1}/2 ==========");
+
+            for (int i = 0; i < 4; i++)
+            {
+                int noteNumber = (repeat * 4) + i + 1;
+                Debug.Log($"[PlayVisual] ========== Note {noteNumber}/8 (Repeat {repeat + 1}, Step {i + 1}/4) ==========");
+
+                int ch = NoteToChannel(tokens[i]);
+                Debug.Log($"[PlayVisual] Token '{tokens[i]}' -> Channel {ch}");
+
+                if (ch < 1 || ch > 4)
+                {
+                    Debug.LogError($"[MainTestController] Invalid token '{tokens[i]}' in {sequence}");
+                    EMSMainTestLogger.Instance?.StopTrial();
+                    yield break;
+                }
+
+                bool isLong = (i == 0 || i == 2);
+                float dur = isLong ? longDurationSec : shortDurationSec;
+                float durMs = dur * 1000f;
+
+                Debug.Log($"[PlayVisual] Ch{ch}, isLong={isLong}, dur={dur}s ({durMs}ms)");
+
+                SetPianoKeyColor(ch, keyHighlightColor);
+
+                EMSMainTestLogger.Instance?.LogEmsCommand(ch, 0, durMs);
+
+                Debug.Log($"[PlayVisual] Key highlighted, waiting {dur}s...");
+                yield return new WaitForSeconds(dur);
+
+                SetPianoKeyColor(ch, keyDefaultColor);
+                Debug.Log("[PlayVisual] Key color reset");
+
+                bool isLastNote = (repeat == 1 && i == 3);
+                if (!isLastNote && pressOnlyGapSec > 0f)
+                {
+                    Debug.Log($"[PlayVisual] Gap {pressOnlyGapSec}s ({pressOnlyGapSec * 1000f}ms)");
+                    EMSMainTestLogger.Instance?.LogGap(pressOnlyGapSec * 1000f);
+                    yield return new WaitForSeconds(pressOnlyGapSec);
+                }
+            }
+        }
+
+        Debug.Log("[PlayVisual] ===== COMPLETE ===== Resetting all keys");
+        ResetAllPianoKeys();
+        EMSMainTestLogger.Instance?.StopTrial();
+        currentStimCoroutine = null;
     }
 
     // =========================
@@ -568,9 +781,8 @@ public class MainTestController : MonoBehaviour
             yield break;
         }
 
-        // Ch6 intensity pattern for gaps (7 gaps total for 8 notes)
-        bool[] ch6UseMax = new bool[] { true, false, true, true, false, true, true };
-        Debug.Log($"[PlayPressRelease] Ch6 intensity pattern for 7 gaps: [max, min, max, max, min, max, max]");
+        bool[] ch6UseMax = new bool[] { true, false, true, true, false, true, true, false };
+        Debug.Log($"[PlayPressRelease] Ch6 intensity pattern for 8 gaps: [max, min, max, max, min, max, max, min]");
 
         int gapIndex = 0;
 
@@ -613,31 +825,37 @@ public class MainTestController : MonoBehaviour
                 Debug.Log("[PlayPressRelease] Base note finished, sending OFF");
                 SendEmsCommand(0, 0, 0, 0, 0, 0, 0f);
 
-                // ✅ 모든 노트 후에 Ch6 release 자극 (마지막 노트 포함)
-                bool useMax = ch6UseMax[gapIndex];
-                int ch6Intensity = useMax ? maxActuations[5] : minActuations[5];
-                float ch6Ms = prCh6PulseSec * 1000f;
-
-                Debug.Log($"[PlayPressRelease] Gap {gapIndex + 1}/7: Ch6 pulse {prCh6PulseSec}s ({ch6Ms}ms), intensity={ch6Intensity} ({(useMax ? "MAX" : "MIN")})");
-
-                EMSMainTestLogger.Instance?.LogEmsCommand(6, ch6Intensity, ch6Ms);
-
-                int[] gapIntensities = new int[ChannelCount];
-                gapIntensities[5] = ch6Intensity;
-
-                SendEmsCommand(0, 0, 0, 0, 0, gapIntensities[5], prCh6PulseSec);
-                yield return new WaitForSeconds(prCh6PulseSec);
-
-                Debug.Log($"[PlayPressRelease] Ch6 pulse finished, OFF gap {prOffGapSec}s ({prOffGapSec * 1000f}ms)");
-                SendEmsCommand(0, 0, 0, 0, 0, 0, 0f);
-
-                if (prOffGapSec > 0f)
+                if (gapIndex < ch6UseMax.Length)
                 {
-                    EMSMainTestLogger.Instance?.LogGap(prOffGapSec * 1000f);
-                    yield return new WaitForSeconds(prOffGapSec);
-                }
+                    bool useMax = ch6UseMax[gapIndex];
+                    int ch6Intensity = useMax ? maxActuations[5] : minActuations[5];
+                    float ch6Ms = prCh6PulseSec * 1000f;
 
-                gapIndex++;
+                    Debug.Log($"[PlayPressRelease] Gap {gapIndex + 1}/8: Ch6 pulse {prCh6PulseSec}s ({ch6Ms}ms), intensity={ch6Intensity} ({(useMax ? "MAX" : "MIN")})");
+
+                    EMSMainTestLogger.Instance?.LogEmsCommand(6, ch6Intensity, ch6Ms);
+
+                    int[] gapIntensities = new int[ChannelCount];
+                    gapIntensities[5] = ch6Intensity;
+
+                    SendEmsCommand(0, 0, 0, 0, 0, gapIntensities[5], prCh6PulseSec);
+                    yield return new WaitForSeconds(prCh6PulseSec);
+
+                    Debug.Log($"[PlayPressRelease] Ch6 pulse finished, OFF gap {prOffGapSec}s ({prOffGapSec * 1000f}ms)");
+                    SendEmsCommand(0, 0, 0, 0, 0, 0, 0f);
+
+                    if (prOffGapSec > 0f)
+                    {
+                        EMSMainTestLogger.Instance?.LogGap(prOffGapSec * 1000f);
+                        yield return new WaitForSeconds(prOffGapSec);
+                    }
+
+                    gapIndex++;
+                }
+                else
+                {
+                    Debug.LogWarning($"[PlayPressRelease] Gap index {gapIndex} exceeds ch6UseMax array length {ch6UseMax.Length}");
+                }
             }
         }
 
@@ -695,72 +913,24 @@ public class MainTestController : MonoBehaviour
         return null;
     }
 
-    // =========================
-    // Arduino TCP
-    // =========================
-    private void ConnectToArduino()
-    {
-        try
-        {
-            Debug.Log($"[MainTestController] Attempting to connect to {arduinoIpAddress}:{arduinoPort}...");
-
-            client = new TcpClient();
-            client.Connect(arduinoIpAddress, arduinoPort);
-            writer = new StreamWriter(client.GetStream());
-            isConnected = true;
-
-            Debug.Log($"[MainTestController] ✅ Arduino connected at {arduinoIpAddress}:{arduinoPort}");
-        }
-        catch (System.Exception e)
-        {
-            Debug.LogError($"[MainTestController] ❌ Error connecting to Arduino: {e.Message}");
-            isConnected = false;
-        }
-    }
-
     private void SendEmsCommand(int intensityCh1, int intensityCh2, int intensityCh3, int intensityCh4, int intensityCh5, int intensityCh6, float durationInSeconds = 0f)
     {
-        if (!isConnected || writer == null)
+        int[] intensities = new int[] { intensityCh1, intensityCh2, intensityCh3, intensityCh4, intensityCh5, intensityCh6 };
+        if (ArduinoTcpClient.Instance == null)
         {
-            Debug.LogWarning("[SendEmsCommand] ❌ Not connected to Arduino!");
+            Debug.LogError("[MainTestController] ArduinoTcpClient.Instance is null. Cannot send EMS.");
+            return;
+        }
+        if (!ArduinoTcpClient.Instance.IsConnected)
+        {
+            Debug.LogWarning("[MainTestController] Arduino not connected. Skip sending EMS.");
             return;
         }
 
-        int[] intensities = new int[]
-        {
-            Mathf.Clamp(intensityCh1, 0, 255),
-            Mathf.Clamp(intensityCh2, 0, 255),
-            Mathf.Clamp(intensityCh3, 0, 255),
-            Mathf.Clamp(intensityCh4, 0, 255),
-            Mathf.Clamp(intensityCh5, 0, 255),
-            Mathf.Clamp(intensityCh6, 0, 255),
-        };
-
-        string command =
-            intensities[0].ToString("D3") +
-            intensities[1].ToString("D3") +
-            intensities[2].ToString("D3") +
-            intensities[3].ToString("D3") +
-            intensities[4].ToString("D3") +
-            intensities[5].ToString("D3") +
-            "\n";
-
-        try
-        {
-            float durationInMs = durationInSeconds * 1000f;
-
-            Debug.Log($"[EMS SENT] ✅ {command.Trim()} | Duration: {durationInMs:F0}ms");
-
-            writer.Write(command);
-            writer.Flush();
-        }
-        catch (System.Exception e)
-        {
-            Debug.LogError($"[SendEmsCommand] ❌ Error sending command: {e.Message}");
-            isConnected = false;
-        }
+        ArduinoTcpClient.Instance.Send(intensities);
     }
 
+    
     private void LoadCalibrationData()
     {
         Debug.Log("[MainTestController] Loading calibration data from PlayerPrefs...");
